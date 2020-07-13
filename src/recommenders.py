@@ -135,12 +135,12 @@ class MainRecommender:
         similar_users = self.model.similar_users(self.userid_to_id[user], N=N+1)[1:]
 
         for user_score in similar_users:
-			best_recs = self.own_recommender.recommend(user_score[0], csr_matrix(self.user_item_matrix).tocsr(), N=3)
-			for one_rec in best_recs:
-				if one_rec[0] in rec:
-					continue
-				rec.append(one_rec[0])
-				break
+            best_recs = self.own_recommender.recommend(user_score[0], csr_matrix(self.user_item_matrix).tocsr(), N=3)
+            for one_rec in best_recs:
+                if one_rec[0] in rec:
+                    continue
+                rec.append(one_rec[0])
+                break
             
         rec = self._extend_rec_popular(rec, N=N)
         
