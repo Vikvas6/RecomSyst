@@ -38,14 +38,13 @@ class MainRecommender:
         # Словарь {item_id: 0/1}. 0/1 - факт принадлежности товара к СТМ
         self.item_id_to_ctm = dict(zip(item_features["item_id"], item_features["brand"] == "Private"))
         
-        # Own recommender обучается до взвешивания матрицы
-        self.own_recommender = self.fit_own_recommender(self.user_item_matrix)
-        
         if weighting:
             self.user_item_matrix = bm25_weight(self.user_item_matrix.T).T 
         
         self.n_factors = n_factors
         self.model = self.fit(self.user_item_matrix, n_factors=n_factors)
+        # Own recommender обучается до взвешивания матрицы
+        self.own_recommender = self.fit_own_recommender(self.user_item_matrix)
      
     @staticmethod
     def prepare_matrix(data):
@@ -100,7 +99,46 @@ class MainRecommender:
         
         return model
 
-    def get_similar_item(self, item_id, filter_ctm=True):
+    def _update_dict(self, user_id):
+        """Если появился новыю user / item, то нужно обновить словари"""
+
+        if user_id not in self.userid_to_id.keys():
+
+            max_id = max(list(self.userid_to_id.values()))
+            max_id += 1
+
+            self.userid_to_id.update({user_id: max_id})
+            self.id_to_userid.update({max_id: user_id})
+			
+    def _get_recommendations(self, user, model, N=5):
+        """Рекомендации через стардартные библиотеки implicit"""
+
+        self._update_dict(user_id=user)
+        res = [self.id_to_itemid[rec[0]] for rec in model.recommend(userid=self.userid_to_id[user],
+                                        user_items=csr_matrix(self.user_item_matrix).tocsr(),
+                                        N=N,
+                                        filter_already_liked_items=False,
+                                        filter_items=[self.itemid_to_id[999999]],
+                                        recalculate_user=True)]
+
+        res = self._extend_with_top_popular(res, N=N)
+
+        assert len(res) == N, 'Количество рекомендаций != {}'.format(N)
+        return res
+		
+    def get_als_recommendations(self, user, N=5):
+        """Рекомендации через стардартные библиотеки implicit"""
+
+        self._update_dict(user_id=user)
+        return self._get_recommendations(user, model=self.model, N=N)
+
+    def get_own_recommendations(self, user, N=5):
+        """Рекомендуем товары среди тех, которые юзер уже купил"""
+
+        self._update_dict(user_id=user)
+        return self._get_recommendations(user, model=self.own_recommender, N=N)
+		
+    def get_similar_item(self, item_id, filter_ctm=False):
         if filter_ctm:
             rec = []
             similar_items = self.model.similar_items(self.itemid_to_id[item_id], N=20)[1:]
@@ -111,17 +149,17 @@ class MainRecommender:
         rec = self.model.similar_items(self.itemid_to_id[item_id], N=2)
         return self.id_to_itemid[rec[1][0]]
 
-    def get_similar_items_recommendation(self, user, filter_ctm=True, N=5):
+    def get_similar_items_recommendation(self, user, filter_ctm=False, N=5):
         """Рекомендуем товары, похожие на топ-N купленных юзером товаров"""
         
         top_user_purchases = self.top_purchases[self.top_purchases['user_id'] == user].head(N)
 
         rec = top_user_purchases['item_id'].apply(lambda x: self.get_similar_item(x, filter_ctm=filter_ctm)).tolist()
-        rec = self._extend_rec_popular(rec, N=N)
+        rec = self._extend_with_top_popular(rec, N=N)
 
         return rec
     
-    def _extend_rec_popular(self, rec, N):        
+    def _extend_with_top_popular(self, rec, N):        
         if len(rec) < N:
             rec.extend(self.overall_top_purchases[:N])
             rec = rec[:N]
@@ -136,12 +174,7 @@ class MainRecommender:
 
         for user_score in similar_users:
             best_recs = self.own_recommender.recommend(user_score[0], csr_matrix(self.user_item_matrix).tocsr(), N=3)
-            for one_rec in best_recs:
-                if one_rec[0] in rec:
-                    continue
-                rec.append(one_rec[0])
-                break
             
-        rec = self._extend_rec_popular(rec, N=N)
+        rec = self._extend_with_top_popular(rec, N=N)
         
         return rec
